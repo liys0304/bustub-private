@@ -12,7 +12,9 @@
 
 #include "buffer/buffer_pool_manager_instance.h"
 
+#include "common/config.h"
 #include "common/macros.h"
+#include "storage/page/page.h"
 
 namespace bustub {
 
@@ -47,13 +49,26 @@ BufferPoolManagerInstance::~BufferPoolManagerInstance() {
   delete replacer_;
 }
 
-bool BufferPoolManagerInstance::FlushPgImp(page_id_t page_id) {
+bool BufferPoolManagerInstance::FlushPgImp(page_id_t page_id) { //flush函数用于写回某个页面
   // Make sure you call DiskManager::WritePage!
+  latch_.lock();
+  if(page_table_.find(page_id) != page_table_.end()) { //如果页表中有该页（目前在页框中）
+    //在BPM中缓存池页面是用数列存储的，即*pages_
+    //调用diskManager写回页面
+    disk_manager_->WritePage(page_id, pages_[page_id].GetData());
+    latch_.unlock();
+    return true;
+  }
+  latch_.unlock();
   return false;
 }
 
 void BufferPoolManagerInstance::FlushAllPgsImp() {
   // You can do it!
+  //页表的映射为<page_id, frame_id>
+  for(auto page : page_table_) {
+    FlushPgImp(page.first);
+  }
 }
 
 Page *BufferPoolManagerInstance::NewPgImp(page_id_t *page_id) {
@@ -62,7 +77,40 @@ Page *BufferPoolManagerInstance::NewPgImp(page_id_t *page_id) {
   // 2.   Pick a victim page P from either the free list or the replacer. Always pick from the free list first.
   // 3.   Update P's metadata, zero out memory and add P to the page table.
   // 4.   Set the page ID output parameter. Return a pointer to P.
-  return nullptr;
+  latch_.lock();
+  Page *ret = nullptr;
+  if(!(free_list_.empty() && replacer_->Size() == 0)) { //判断是否空闲页或可被逐出的页面
+    page_id_t new_page_id = AllocatePage();
+    frame_id_t vic_p;
+    //如果空闲页非空
+    if(!free_list_.empty()) {
+      vic_p = free_list_.front(); //拿到空页的页框号（该函数返回的是页框号）
+      free_list_.pop_front(); //链表头的页框已经被占用，删除节点
+    } else { //如果没有空闲页面，但是有可以被逐出的页面
+      if(!replacer_->Victim(&vic_p)) { //如果逐出失败解锁返回空指针
+        latch_.unlock();
+        return nullptr;
+      }
+      //vic_p能通过victim方法来带回被逐出的页框号
+      if(pages_[vic_p].IsDirty()) {//如果该页面脏则需要写回
+        disk_manager_->WritePage(pages_[vic_p].GetPageId(), pages_[vic_p].GetData());
+      }
+      page_table_.erase(pages_[vic_p].page_id_); //逐出
+    }
+
+    //清理页框，给新页面建立映射
+    //这里pages_维护的是实际上的BP空间，page_table_是页框号到页面号的映射
+    pages_[vic_p].ResetMemory();
+    pages_[vic_p].is_dirty_ = false;
+    pages_[vic_p].page_id_ = new_page_id;
+    page_table_[new_page_id] = vic_p;
+    *page_id = new_page_id;
+    ret = &pages_[vic_p];
+    //如果所有缓冲池中的页面都被pin了，返回空指针意味新页也需要被pin
+    pages_[vic_p].pin_count_ = 1;
+  }
+  latch_.unlock();
+  return ret;
 }
 
 Page *BufferPoolManagerInstance::FetchPgImp(page_id_t page_id) {
@@ -73,7 +121,37 @@ Page *BufferPoolManagerInstance::FetchPgImp(page_id_t page_id) {
   // 2.     If R is dirty, write it back to the disk.
   // 3.     Delete R from the page table and insert P.
   // 4.     Update P's metadata, read in the page content from disk, and then return a pointer to P.
-  return nullptr;
+  latch_.lock();
+  Page *ret = nullptr;
+  if(page_table_.find(page_id) != page_table_.end()) { //页面已经存在就PIN一下
+    replacer_->Pin(page_table_.find(page_id)->second);
+    ret = &pages_[page_table_.find(page_id)->second];
+    ++ret->pin_count_;
+  } else if (!(free_list_.empty() && replacer_->Size() == 0)) { //如果需要读入，检查是否有位置
+    frame_id_t vic_p;
+    if(!free_list_.empty()) {
+      vic_p = free_list_.front();
+      free_list_.pop_front();
+    } else {
+      replacer_->Victim(&vic_p);
+      if(pages_[vic_p].IsDirty()) {
+        disk_manager_->WritePage(pages_[vic_p].GetPageId(), pages_[vic_p].GetData());
+      }
+      page_table_.erase(pages_[vic_p].GetPageId());
+    }
+    pages_[vic_p].ResetMemory();
+    pages_[vic_p].is_dirty_ = false;
+    pages_[vic_p].page_id_ = page_id;
+    disk_manager_->ReadPage(page_id, pages_[vic_p].data_);
+    page_table_[page_id] = vic_p;
+    pages_[vic_p].page_id_ = 1;
+  } else {
+    for (frame_id_t i = 0; i < static_cast<int>(pool_size_); i++) {
+      //LOG_INFO()
+    }
+  }
+  latch_.unlock();
+  return ret;
 }
 
 bool BufferPoolManagerInstance::DeletePgImp(page_id_t page_id) {
@@ -82,7 +160,23 @@ bool BufferPoolManagerInstance::DeletePgImp(page_id_t page_id) {
   // 1.   If P does not exist, return true.
   // 2.   If P exists, but has a non-zero pin-count, return false. Someone is using the page.
   // 3.   Otherwise, P can be deleted. Remove P from the page table, reset its metadata and return it to the free list.
-  return false;
+  
+  latch_.lock();
+  bool ret = true;
+  if(page_table_.find(page_id) != page_table_.end()) {
+    if(pages_[page_table_[page_id]].GetPinCount() == 0) {
+      replacer_->Pin(page_table_[page_id]); //PIN和Victm都是将可逐出的页面删除，pin执行效率更高
+      pages_[page_table_[page_id]].ResetMemory();
+      pages_[page_table_[page_id]].is_dirty_ = false;
+      free_list_.emplace_back(page_table_[page_id]);
+      page_table_.erase(page_id);
+      DeallocatePage(page_id);//这个函数的作用是将页面写回磁盘
+    } else {
+      ret = false;
+    }
+  }
+  latch_.unlock();
+  return ret;
 }
 
 bool BufferPoolManagerInstance::UnpinPgImp(page_id_t page_id, bool is_dirty) { return false; }

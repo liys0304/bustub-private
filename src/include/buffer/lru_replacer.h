@@ -52,6 +52,7 @@ class LRUReplacer : public Replacer {
   std::list<frame_id_t> list_;
   std::unordered_map<frame_id_t, std::list<frame_id_t>::iterator> map_;
   std::mutex mtx_;
+  //使用map+链表的组合保证了查找和删除都是常量的时间复杂度
 };
 
 }  // namespace bustub

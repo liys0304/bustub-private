@@ -32,7 +32,8 @@ bool LRUReplacer::Victim(frame_id_t *frame_id) {
   return true;
 }
 
-void LRUReplacer::Pin(frame_id_t frame_id) {
+void LRUReplacer::Pin(frame_id_t frame_id) { //pin函数的作用是将希望不会被淘汰的页面标记出来
+//pin之后直接在链表中删除
   mtx_.lock();
   if (map_.find(frame_id) != map_.end()) {
     list_.erase(map_[frame_id]);
@@ -42,20 +43,21 @@ void LRUReplacer::Pin(frame_id_t frame_id) {
   mtx_.unlock();
 }
 
-void LRUReplacer::Unpin(frame_id_t frame_id) {
+void LRUReplacer::Unpin(frame_id_t frame_id) { //unpin即为解除pin的锁定
   mtx_.lock();
-  if (map_.find(frame_id) != map_.end()) {
+  if (map_.find(frame_id) != map_.end()) { //如果在链表中能找到该页
+  //则说明没有被pin，直接解锁返回
     mtx_.unlock();
     return;
   }
-  if (static_cast<int>(list_.size()) == max_page_num_) {
-    frame_id_t *vic = nullptr;
-    if (!Victim(vic)) {
+  if (static_cast<int>(list_.size()) == max_page_num_) { //假如此时缓冲区满
+    frame_id_t *vic = nullptr; //这里传入nullptr的意思是需要将被淘汰的页面用传参的形式返回
+    if (!Victim(vic)) {//如果删除失败直接解锁返回
       mtx_.unlock();
       return;
     }
   }
-  list_.emplace_back(frame_id);
+  list_.emplace_back(frame_id); //如果成功则将刚解锁的页面插入链表尾
   map_[frame_id] = --list_.end();
   mtx_.unlock();
 }
