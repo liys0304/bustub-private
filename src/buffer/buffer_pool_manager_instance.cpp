@@ -179,7 +179,23 @@ bool BufferPoolManagerInstance::DeletePgImp(page_id_t page_id) {
   return ret;
 }
 
-bool BufferPoolManagerInstance::UnpinPgImp(page_id_t page_id, bool is_dirty) { return false; }
+bool BufferPoolManagerInstance::UnpinPgImp(page_id_t page_id, bool is_dirty) { 
+  latch_.lock();
+  bool ret = false;
+  if(page_table_.find(page_id) != page_table_.end()) { //如果解锁页面在页表中
+    if(pages_[page_table_[page_id]].pin_count_ <= 0) {
+      //
+    }
+    ret = true;
+    pages_[page_table_[page_id]].is_dirty_ |= is_dirty;
+    --pages_[page_table_[page_id]].pin_count_;
+    if(pages_[page_table_[page_id]].pin_count_ == 0) {
+      replacer_->Unpin(page_table_[page_id]);
+    }
+  }
+  latch_.unlock();
+  return ret;
+}
 
 page_id_t BufferPoolManagerInstance::AllocatePage() {
   const page_id_t next_page_id = next_page_id_;
