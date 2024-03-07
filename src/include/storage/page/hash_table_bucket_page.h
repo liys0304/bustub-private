@@ -12,6 +12,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <utility>
 #include <vector>
 
@@ -136,6 +137,10 @@ class HashTableBucketPage {
    * Prints the bucket's occupancy information
    */
   void PrintBucket();
+
+  void SetPair(KeyType key, ValueType value, uint32_t bucket_idx);
+
+  void DeleteAt(uint32_t bucket_idx);
 
  private:
   //  For more on BUCKET_ARRAY_SIZE see storage/page/hash_table_page_defs.h

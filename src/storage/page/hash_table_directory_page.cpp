@@ -12,43 +12,79 @@
 
 #include "storage/page/hash_table_directory_page.h"
 #include <algorithm>
+#include <cstdint>
 #include <unordered_map>
 #include "common/logger.h"
 
 namespace bustub {
-page_id_t HashTableDirectoryPage::GetPageId() const { return page_id_; }
+page_id_t HashTableDirectoryPage::GetPageId() const { return page_id_; } //获取当前页目录号
 
-void HashTableDirectoryPage::SetPageId(bustub::page_id_t page_id) { page_id_ = page_id; }
+void HashTableDirectoryPage::SetPageId(bustub::page_id_t page_id) { page_id_ = page_id; } //设置当前页目录号
 
-lsn_t HashTableDirectoryPage::GetLSN() const { return lsn_; }
+lsn_t HashTableDirectoryPage::GetLSN() const { return lsn_; } //返回日志序列号
 
-void HashTableDirectoryPage::SetLSN(lsn_t lsn) { lsn_ = lsn; }
+void HashTableDirectoryPage::SetLSN(lsn_t lsn) { lsn_ = lsn; } //设置日志号
 
-uint32_t HashTableDirectoryPage::GetGlobalDepth() { return global_depth_; }
+uint32_t HashTableDirectoryPage::GetGlobalDepth() { return global_depth_; } //获得全局页目录表深度
+/*global_depth用于确定这个key对应的directory_index在哪
+就是取这个key经过哈希之后的低global_depth位来判断directory_index
+比如当前要插入的key哈希之后是00110，global_depth=3
+那么低三位就是110,directory_index = 6*/
 
-uint32_t HashTableDirectoryPage::GetGlobalDepthMask() { return 0; }
+uint32_t HashTableDirectoryPage::GetGlobalDepthMask() { return (1 << global_depth_) - 1; } 
+//由上述，掩码就是1左移global_depth位后-1, 根据上例此时掩码为111
 
-void HashTableDirectoryPage::IncrGlobalDepth() {}
+void HashTableDirectoryPage::IncrGlobalDepth() {
+  //增加页目录表容量，把扩容前的桶分布情况拷贝一份到扩容后的位置
+  for(int i = static_cast<int>(Size() - 1); i >= 0; i--) {
+    bucket_page_ids_[i + Size()] = bucket_page_ids_[i];
+    local_depths_[i + Size()] = local_depths_[i];
+  }
+  global_depth_++;
+}
 
 void HashTableDirectoryPage::DecrGlobalDepth() { global_depth_--; }
 
-page_id_t HashTableDirectoryPage::GetBucketPageId(uint32_t bucket_idx) { return 0; }
+page_id_t HashTableDirectoryPage::GetBucketPageId(uint32_t bucket_idx) { return bucket_page_ids_[bucket_idx]; }
 
-void HashTableDirectoryPage::SetBucketPageId(uint32_t bucket_idx, page_id_t bucket_page_id) {}
+void HashTableDirectoryPage::SetBucketPageId(uint32_t bucket_idx, page_id_t bucket_page_id) {
+  bucket_page_ids_[bucket_idx] = bucket_page_id;
+}
 
-uint32_t HashTableDirectoryPage::Size() { return 0; }
+//global_depth有多少位目录长度就是2的多少次方
+uint32_t HashTableDirectoryPage::Size() { return 1 << global_depth_; }
 
-bool HashTableDirectoryPage::CanShrink() { return false; }
+//检查页目录表是否能收缩，即有没有一个局部深度比全局深度大
+bool HashTableDirectoryPage::CanShrink() { 
+  for(int i = static_cast<int>(Size() - 1); i >= 0; i--) {
+    if(local_depths_[i] >= global_depth_) {
+      return false;
+    }
+  }
+  return true;
+}
 
-uint32_t HashTableDirectoryPage::GetLocalDepth(uint32_t bucket_idx) { return 0; }
+/*local_depth不和directory_index相关，而是和桶相关，根据local_depth和global_depth的关系来决定发生桶溢出*/
+uint32_t HashTableDirectoryPage::GetLocalDepth(uint32_t bucket_idx) { return local_depths_[bucket_idx]; }
 
-void HashTableDirectoryPage::SetLocalDepth(uint32_t bucket_idx, uint8_t local_depth) {}
+void HashTableDirectoryPage::SetLocalDepth(uint32_t bucket_idx, uint8_t local_depth) {
+  local_depths_[bucket_idx] = local_depth;
+}
 
-void HashTableDirectoryPage::IncrLocalDepth(uint32_t bucket_idx) {}
+void HashTableDirectoryPage::IncrLocalDepth(uint32_t bucket_idx) { ++local_depths_[bucket_idx]; }
 
-void HashTableDirectoryPage::DecrLocalDepth(uint32_t bucket_idx) {}
+void HashTableDirectoryPage::DecrLocalDepth(uint32_t bucket_idx) { --local_depths_[bucket_idx]; }
 
-uint32_t HashTableDirectoryPage::GetLocalHighBit(uint32_t bucket_idx) { return 0; }
+uint32_t HashTableDirectoryPage::GetLocalHighBit(uint32_t bucket_idx) {
+  return bucket_idx & ~((1 << GetLocalDepth(bucket_idx)) - 1);
+}
+
+/*桶分裂之后分裂出来的bucket_page的directory_index，只要将当前桶的directory_index中
+local_depth对应的位取反，例如directory_index = 001, local_depth = 2
+那么split_img_index就是001*/
+uint32_t HashTableDirectoryPage::GetSplitImageIndex(uint32_t bucket_idx) {
+  return (bucket_idx * 2 < Size()) ? (bucket_idx + Size() / 2) : (bucket_idx - Size() / 2);
+}
 
 /**
  * VerifyIntegrity - Use this for debugging but **DO NOT CHANGE**

@@ -12,6 +12,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <queue>
 #include <string>
 #include <vector>
@@ -21,6 +22,7 @@
 #include "container/hash/hash_function.h"
 #include "storage/page/hash_table_bucket_page.h"
 #include "storage/page/hash_table_directory_page.h"
+#include "storage/page/hash_table_page_defs.h"
 
 namespace bustub {
 
@@ -136,6 +138,8 @@ class ExtendibleHashTable {
    */
   HASH_TABLE_BUCKET_TYPE *FetchBucketPage(page_id_t bucket_page_id);
 
+  HASH_TABLE_BUCKET_TYPE *FetchPageByKey(KeyType key);
+
   /**
    * Performs insertion with an optional bucket splitting.
    *
@@ -160,6 +164,8 @@ class ExtendibleHashTable {
    * @param value the value that was removed
    */
   void Merge(Transaction *transaction, const KeyType &key, const ValueType &value);
+
+  bool MergeMain(HashTableDirectoryPage *dpg, uint32_t kti);
 
   // member variables
   page_id_t directory_page_id_;
