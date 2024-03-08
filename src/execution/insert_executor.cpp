@@ -11,17 +11,69 @@
 //===----------------------------------------------------------------------===//
 
 #include <memory>
+#include <utility>
+#include <vector>
 
+#include "catalog/catalog.h"
+#include "common/rid.h"
+#include "concurrency/transaction.h"
 #include "execution/executors/insert_executor.h"
+#include "storage/index/index.h"
+#include "storage/table/tuple.h"
+#include "type/value.h"
 
 namespace bustub {
 
 InsertExecutor::InsertExecutor(ExecutorContext *exec_ctx, const InsertPlanNode *plan,
                                std::unique_ptr<AbstractExecutor> &&child_executor)
-    : AbstractExecutor(exec_ctx) {}
+    : AbstractExecutor(exec_ctx), plan_(plan), child_executor_(std::move(child_executor)) {}
 
-void InsertExecutor::Init() {}
+void InsertExecutor::Init() {
+  table_info_ = GetExecutorContext()->GetCatalog()->GetTable(plan_->TableOid());
+  indexes_ = GetExecutorContext()->GetCatalog()->GetTableIndexes(table_info_->name_);
+  if (!plan_->IsRawInsert()) {
+    child_executor_->Init();
+  }
+}
 
-bool InsertExecutor::Next([[maybe_unused]] Tuple *tuple, RID *rid) { return false; }
+bool InsertExecutor::Next([[maybe_unused]] Tuple *tuple, RID *rid) {
+  RID out_rid{};
+  Tuple tuple_insert;
+  if (plan_->IsRawInsert()) {
+    for (const auto &raw_value : plan_->RawValues()) {
+      tuple_insert = Tuple(raw_value, &table_info_->schema_);
+      if (table_info_->table_->InsertTuple(tuple_insert, &out_rid, GetExecutorContext()->GetTransaction())) {
+        for (IndexInfo *index : indexes_) {
+          std::vector<Value> key_index_vals{};
+          for (auto const &i : index->index_->GetKeyAttrs()) {
+            key_index_vals.emplace_back(tuple_insert.GetValue(&table_info_->schema_, i));
+          }
+          index->index_->InsertEntry(Tuple(key_index_vals, index->index_->GetKeySchema()), out_rid,
+                                     GetExecutorContext()->GetTransaction());
+          GetExecutorContext()->GetTransaction()->AppendTableWriteRecord(IndexWriteRecord(
+              out_rid, table_info_->oid_, WType::INSERT, Tuple(key_index_vals, index->index_->GetKeySchema()),
+              index->index_oid_, GetExecutorContext()->GetCatalog()));
+        }
+      }
+    }
+  } else {
+    while (child_executor_->Next(&tuple_insert, &out_rid)) {
+      if (table_info_->table_->InsertTuple(tuple_insert, &out_rid, GetExecutorContext()->GetTransaction())) {
+        for (IndexInfo *index : indexes_) {
+          std::vector<Value> key_index_vals{};
+          for (auto const &i : index->index_->GetKeyAttrs()) {
+            key_index_vals.emplace_back(tuple_insert.GetValue(child_executor_->GetOutputSchema(), i));
+          }
+          index->index_->InsertEntry(Tuple(key_index_vals, index->index_->GetKeySchema()), out_rid,
+                                     GetExecutorContext()->GetTransaction());
+          GetExecutorContext()->GetTransaction()->AppendTableWriteRecord(IndexWriteRecord(
+              out_rid, table_info_->oid_, WType::INSERT, Tuple(key_index_vals, index->index_->GetKeySchema()),
+              index->index_oid_, GetExecutorContext()->GetCatalog()));
+        }
+      }
+    }
+  }
+  return false;
+}
 
 }  // namespace bustub
