@@ -11,16 +11,57 @@
 //===----------------------------------------------------------------------===//
 
 #include "execution/executors/nested_loop_join_executor.h"
+#include <cstdint>
+#include <utility>
+#include <vector>
+#include "catalog/schema.h"
+#include "storage/table/tuple.h"
+#include "type/value.h"
 
 namespace bustub {
 
 NestedLoopJoinExecutor::NestedLoopJoinExecutor(ExecutorContext *exec_ctx, const NestedLoopJoinPlanNode *plan,
                                                std::unique_ptr<AbstractExecutor> &&left_executor,
                                                std::unique_ptr<AbstractExecutor> &&right_executor)
-    : AbstractExecutor(exec_ctx) {}
+    : AbstractExecutor(exec_ctx),
+      plan_(plan),
+      left_executor_(std::move(left_executor)),
+      right_executor_(std::move(right_executor)) {}
 
-void NestedLoopJoinExecutor::Init() {}
+void NestedLoopJoinExecutor::Init() {
+  left_executor_->Init();
+  right_executor_->Init();
+  outer_not_end_ = left_executor_->Next(&outer_tuple_, &outer_rid_);
+  inner_not_end_ = right_executor_->Next(&inner_tuple_, &inner_rid_);
+}
 
-bool NestedLoopJoinExecutor::Next(Tuple *tuple, RID *rid) { return false; }
+bool NestedLoopJoinExecutor::Next(Tuple *tuple, RID *rid) {
+  const Schema *outer_schema = left_executor_->GetOutputSchema();
+  const Schema *inner_schema = right_executor_->GetOutputSchema();
+  while (outer_not_end_ || inner_not_end_) {
+    if (outer_not_end_ && inner_not_end_ &&
+        (plan_->Predicate() == nullptr ||
+         plan_->Predicate()->EvaluateJoin(&outer_tuple_, outer_schema, &inner_tuple_, inner_schema).GetAs<bool>())) {
+      std::vector<Value> values;
+      for (uint32_t i = 0; i < plan_->OutputSchema()->GetColumnCount(); ++i) {
+        values.emplace_back(plan_->OutputSchema()->GetColumn(i).GetExpr()->EvaluateJoin(&outer_tuple_, outer_schema,
+                                                                                        &inner_tuple_, inner_schema));
+      }
+      *tuple = Tuple(values, plan_->OutputSchema());
+      inner_not_end_ = right_executor_->Next(&inner_tuple_, &inner_rid_);
+      return true;
+    }
+    if (inner_not_end_) {
+      inner_not_end_ = right_executor_->Next(&inner_tuple_, &inner_rid_);
+    } else {
+      outer_not_end_ = left_executor_->Next(&outer_tuple_, &outer_rid_);
+      if (outer_not_end_) {
+        right_executor_->Init();
+        inner_not_end_ = right_executor_->Next(&inner_tuple_, &inner_rid_);
+      }
+    }
+  }
+  return false;
+}
 
 }  // namespace bustub

@@ -12,11 +12,48 @@
 
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
 #include <memory>
+#include <unordered_set>
 #include <utility>
+#include <vector>
 
+#include "common/util/hash_util.h"
 #include "execution/executors/abstract_executor.h"
 #include "execution/plans/distinct_plan.h"
+#include "type/limits.h"
+#include "type/value.h"
+
+namespace bustub {
+struct DistinctKey {
+  std::vector<Value> col_vals_;
+  bool operator==(const DistinctKey &other) const {
+    for (uint32_t i = 0; i < other.col_vals_.size(); i++) {
+      if (col_vals_[i].CompareEquals(other.col_vals_[i]) != CmpBool::CmpTrue) {
+        return false;
+        ;
+      }
+    }
+    return true;
+  }
+};
+}  // namespace bustub
+
+namespace std {
+template <>
+struct hash<bustub::DistinctKey> {
+  std::size_t operator()(const bustub::DistinctKey &dis_key) const {
+    size_t curr_hash = 0;
+    for (const auto &key : dis_key.col_vals_) {
+      if (!key.IsNull()) {
+        curr_hash = bustub::HashUtil::CombineHashes(curr_hash, bustub::HashUtil::HashValue(&key));
+      }
+    }
+    return curr_hash;
+  }
+};
+}  // namespace std
 
 namespace bustub {
 
@@ -53,5 +90,7 @@ class DistinctExecutor : public AbstractExecutor {
   const DistinctPlanNode *plan_;
   /** The child executor from which tuples are obtained */
   std::unique_ptr<AbstractExecutor> child_executor_;
+  std::unordered_set<DistinctKey> hashset_{};
+  std::unordered_set<DistinctKey>::iterator iter_;
 };
 }  // namespace bustub

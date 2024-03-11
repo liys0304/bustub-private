@@ -12,6 +12,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <utility>
 
@@ -53,5 +54,6 @@ class LimitExecutor : public AbstractExecutor {
   const LimitPlanNode *plan_;
   /** The child executor from which tuples are obtained */
   std::unique_ptr<AbstractExecutor> child_executor_;
+  uint32_t index_{0};
 };
 }  // namespace bustub
