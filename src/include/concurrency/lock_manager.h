@@ -51,6 +51,7 @@ class LockManager {
     std::condition_variable cv_;
     // txn_id of an upgrading transaction (if any)
     txn_id_t upgrading_ = INVALID_TXN_ID;
+    std::mutex latch_;
   };
 
  public:
@@ -103,6 +104,22 @@ class LockManager {
    * @return true if the unlock is successful, false otherwise
    */
   bool Unlock(Transaction *txn, const RID &rid);
+
+  /**
+   *@param lock_mode 0-lock shared, 1-exclusive, 2-upgrade
+   * @return true if pass the check, false or exception otherwise
+   */
+  bool LockPreCheck(Transaction *txn, const RID &rid, int lock_mode);
+
+  std::list<LockRequest>::iterator GetRequestInQueue(LockRequestQueue *lrq, const txn_id_t &id);
+
+  /**
+   * @param lower_bound EXCLUSIVE means only check X lock, shared means check S and X locks
+   * @return if there is an older lock request, false otherwise
+   */
+  bool OldExists(LockRequestQueue *lrq, const txn_id_t &id, LockMode lower_bound);
+
+  void KillYoungerRequest(LockRequestQueue *lrq, Transaction *txn, LockMode lower_bound);
 
  private:
   std::mutex latch_;
